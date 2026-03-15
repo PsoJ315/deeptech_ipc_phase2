@@ -1,0 +1,7 @@
+project_name: deeptech_ipc_phase2
+input_fields:
+  - title
+  - abstract
+support_fields:
+  - claims
+output_dir: artifacts

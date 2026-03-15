@@ -1,0 +1,10 @@
+pandas
+numpy
+scikit-learn
+pyyaml
+tqdm
+kiwipiepy
+networkx
+sentence-transformers
+lightgbm
+pytest
