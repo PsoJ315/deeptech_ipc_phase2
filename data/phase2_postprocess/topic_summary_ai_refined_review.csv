@@ -1,0 +1,31 @@
+﻿topic_id,topic_label,n_phrases,sum_doc_count,generic_ratio,label_genericity,phrases,review_status,review_note,priority
+29,프로세서,51,269.0,0.1470588235294117,specific,프로세서 | 디스플레이 | 프로세스 | 사용자 단말 | 플라즈마 | 게이트 | 아크릴 | 텍스트 | 트레이 | 플레이트 | 단말기 | 억제제 | 와이어 | 인서트 | 전해질 | 주파수 | 매트릭스 | 방향족 | 스마트 | 포토레지스트,MIXED_LARGE,대형 residual cluster 가능성 높음. Phase 2.5 재분해 후보.,1
+1,윤활유 조성,4,55.0,0.625,specific,윤활유 조성 | 윤활유 조성물 | 조성물 | 혼합물,ALIAS_HEAVY,동일 계열 alias가 많이 섞인 패밀리. split보다 표시 정제 권장.,2
+23,탄소,1,14.0,0.5,maybe_generic,탄소,TOO_BROAD_SINGLE,단일 broad term. 상위 seed로는 유효하지만 독립 concept 해석은 주의.,2
+16,배터리,1,12.0,0.0,specific,배터리,TOO_BROAD_SINGLE,단일 broad term. 상위 seed로는 유효하지만 독립 concept 해석은 주의.,2
+14,단백질,1,8.0,0.0,specific,단백질,TOO_BROAD_SINGLE,단일 broad term. 상위 seed로는 유효하지만 독립 concept 해석은 주의.,2
+21,유전자,1,8.0,0.0,specific,유전자,TOO_BROAD_SINGLE,단일 broad term. 상위 seed로는 유효하지만 독립 concept 해석은 주의.,2
+28,실시간,1,5.0,0.0,specific,실시간,TOO_BROAD_SINGLE,단일 broad term. 상위 seed로는 유효하지만 독립 concept 해석은 주의.,2
+12,바이러스,1,3.0,0.0,specific,바이러스,LOW_CONFIDENCE,빈도와 구성 모두 작아 후속 검토 필요.,3
+15,데이터 유닛,1,3.0,0.5,maybe_generic,데이터 유닛,LOW_CONFIDENCE,빈도와 구성 모두 작아 후속 검토 필요.,3
+22,포토레지스트 조성물,1,3.0,0.0,specific,포토레지스트 조성물,LOW_CONFIDENCE,빈도와 구성 모두 작아 후속 검토 필요.,3
+6,CSI,1,2.0,0.0,specific,CSI,LOW_CONFIDENCE,빈도와 구성 모두 작아 후속 검토 필요.,3
+13,HARQ,1,2.0,0.0,specific,HARQ,LOW_CONFIDENCE,빈도와 구성 모두 작아 후속 검토 필요.,3
+17,PDCCH,1,2.0,0.0,specific,PDCCH,LOW_CONFIDENCE,빈도와 구성 모두 작아 후속 검토 필요.,3
+19,메탄올,1,2.0,0.0,specific,메탄올,LOW_CONFIDENCE,빈도와 구성 모두 작아 후속 검토 필요.,3
+20,파이프,1,2.0,0.0,specific,파이프,LOW_CONFIDENCE,빈도와 구성 모두 작아 후속 검토 필요.,3
+25,ACK,1,2.0,0.0,specific,ACK,LOW_CONFIDENCE,빈도와 구성 모두 작아 후속 검토 필요.,3
+4,컴퓨터,10,55.0,0.0,specific,컴퓨터 | 컴퓨터 프로그램 | 디지털 | 컴퓨팅 | 애플리케이션 | 프로그램 제품 | 컴퓨터 구현 | 디지털 변환 | 디지털 트윈 | 컴퓨터 판독,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+5,반도체,5,47.0,0.0,specific,반도체 | 실리콘 | 반도체 장치 | 트랜지스터 | 반도체 디바이스,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+7,이미지,4,42.0,0.0,specific,이미지 | 카메라 | 비디오 | 이미지 센서,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+10,알루미늄,6,39.0,0.0833333333333333,specific,알루미늄 | 산화물 | 화학식 | 나트륨 이온 | 알루미늄 합금 | 리튬,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+0,에너지,4,24.0,0.0,specific,에너지 | 열처리 | RF 에너지 | 에너지 발생,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+3,메모리,2,24.0,0.0,specific,메모리 | 인코딩,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+9,레이저,3,22.0,0.0,specific,레이저 | 방사선 | 자외선,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+2,접착제,3,17.0,0.0,specific,접착제 | 플라스틱 | 폴리머,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+8,케이블,3,11.0,0.0,specific,케이블 | 커넥터 | 단섬유,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+24,레이트,3,10.0,0.0,specific,레이트 | AAV | 파일럿,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+11,테스트,2,9.0,0.0,specific,테스트 | 테스트 코드,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+26,자동차,2,9.0,0.0,specific,자동차 | 드라이버,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+27,오디오,3,7.0,0.0,specific,오디오 | 전자파 차폐 | 초음파 발생,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
+18,모니터링,2,7.0,0.25,specific,모니터링 | 모니터링 시스템,OK,현 단계에서 바로 사용 가능한 1차 concept family.,4
