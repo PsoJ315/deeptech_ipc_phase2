@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 import re
 import traceback
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
@@ -14,22 +16,135 @@ GENERIC_LABEL_STOPWORDS = {
     "부재", "기판", "회로", "구조", "모듈", "물질", "재료", "부품",
     "표면", "용액", "기재", "유닛", "소자", "부분", "장비",
     "서비스", "콘텐츠", "베이스", "가이드", "프레임",
+    "플랫폼", "애플리케이션", "프로세스", "테스트", "업데이트",
+    "케이스", "컨테이너", "구조체", "구조물", "설비", "기술",
+    "장착체", "본체", "인터페이스", "패키지", "세트", "폼",
+    "매체", "정보", "신호처리장치", "데이터처리장치",
+}
+
+# 단독 phrase로 있으면 개념력이 약한 것들
+WEAK_SINGLETON_TERMS = {
+    "프레임", "플랫폼", "서비스", "프로그램", "콘텐츠", "시스템",
+    "구조체", "구조물", "부재", "장치", "디바이스", "유닛",
+    "케이스", "컨테이너", "모듈", "베이스", "가이드", "재료",
+    "물질", "부분", "기판", "부품", "표면", "용액", "방법",
+    "데이터", "정보", "기술", "장비", "기기",
 }
 
 PREFERRED_SIGNAL_TERMS = {
     "디지털", "트윈", "이미지", "영상", "분석", "처리", "신호", "데이터",
     "반도체", "센서", "배터리", "전지", "전극", "전해질", "촉매", "합금",
     "리튬", "그래핀", "카본", "탄소", "실리콘", "규소",
+    "음극", "양극", "전구체", "집전체", "박막", "패터닝", "포토레지스트",
+    "트랜지스터", "반응기", "전해액", "고체전해질", "복합재", "복합체",
+    "초음파", "광학", "바이오", "의료", "전력", "고분자", "나노",
+    "분리막", "도전재", "집적회로", "인공지능", "머신러닝",
 }
 
 TOKEN_PATTERN = r"(?u)\b[\w가-힣][\w가-힣\-\+/]*\b"
+KOR_PATTERN = re.compile(r"[가-힣]")
+ENG_PATTERN = re.compile(r"[A-Za-z]")
+NUM_ONLY_PATTERN = re.compile(r"^\d+([.,]\d+)?$")
+ALNUM_SHORT_PATTERN = re.compile(r"^[A-Za-z0-9]{1,2}$")
 
-# small-scale fallback threshold
 SMALL_DATA_FALLBACK_THRESHOLD = 300
+LARGE_CLUSTER_SPLIT_THRESHOLD = 15
+MAX_FINAL_CLUSTERS = 28
+MIN_FINAL_CLUSTERS = 10
 
 
 def normalize_spaces(text: str) -> str:
     return re.sub(r"\s+", " ", str(text)).strip()
+
+
+def tokenize_text(text: str) -> list[str]:
+    return [t for t in re.findall(TOKEN_PATTERN, normalize_spaces(text)) if t]
+
+
+def contains_signal_term(text: str) -> bool:
+    text = normalize_spaces(text)
+    return any(sig in text for sig in PREFERRED_SIGNAL_TERMS)
+
+
+def is_meaningful_phrase(text: str) -> bool:
+    text = normalize_spaces(text)
+    if not text:
+        return False
+
+    tokens = tokenize_text(text)
+    if not tokens:
+        return False
+
+    if len(tokens) == 1:
+        tok = tokens[0]
+        if tok in WEAK_SINGLETON_TERMS:
+            return False
+        if NUM_ONLY_PATTERN.match(tok):
+            return False
+        if ALNUM_SHORT_PATTERN.match(tok) and not contains_signal_term(tok):
+            return False
+        if len(tok) <= 2 and not contains_signal_term(tok):
+            return False
+
+    if len(tokens) >= 2:
+        informative_tokens = [
+            t for t in tokens
+            if t not in GENERIC_LABEL_STOPWORDS
+            and not NUM_ONLY_PATTERN.match(t)
+            and len(t) >= 2
+        ]
+        if len(informative_tokens) == 0 and not contains_signal_term(text):
+            return False
+
+    if len(text) <= 2 and not contains_signal_term(text):
+        return False
+
+    return True
+
+
+def score_phrase_quality(text: str) -> float:
+    text = normalize_spaces(text)
+    tokens = tokenize_text(text)
+
+    if not tokens:
+        return -999.0
+
+    score = 0.0
+
+    informative_tokens = [
+        t for t in tokens
+        if t not in GENERIC_LABEL_STOPWORDS and not NUM_ONLY_PATTERN.match(t)
+    ]
+    weak_tokens = [t for t in tokens if t in GENERIC_LABEL_STOPWORDS]
+
+    score += min(len(informative_tokens) * 1.2, 4.0)
+    score -= min(len(weak_tokens) * 0.8, 3.0)
+
+    if contains_signal_term(text):
+        score += 2.5
+
+    if len(tokens) == 1 and tokens[0] in WEAK_SINGLETON_TERMS:
+        score -= 4.0
+
+    if len(text) >= 6:
+        score += 0.7
+    if len(text) >= 10:
+        score += 0.6
+    if len(text) >= 16:
+        score += 0.3
+
+    if KOR_PATTERN.search(text):
+        score += 0.2
+    if ENG_PATTERN.search(text):
+        score += 0.2
+
+    if NUM_ONLY_PATTERN.match(text):
+        score -= 5.0
+
+    if ALNUM_SHORT_PATTERN.match(text):
+        score -= 2.0
+
+    return score
 
 
 def resolve_input_file(
@@ -97,67 +212,6 @@ def safe_import_fallback_stack():
     return SentenceTransformer, AgglomerativeClustering
 
 
-def build_topic_label_from_terms(terms: list[tuple[str, float]], topic_id: int) -> str:
-    if topic_id == -1:
-        return "OUTLIER"
-
-    cleaned_terms: list[str] = []
-    fallback_terms: list[str] = []
-
-    for term, _score in terms:
-        term = normalize_spaces(term)
-        if not term:
-            continue
-        fallback_terms.append(term)
-        if term not in GENERIC_LABEL_STOPWORDS:
-            cleaned_terms.append(term)
-
-    chosen = cleaned_terms[:3] if cleaned_terms else fallback_terms[:3]
-    if not chosen:
-        return f"TOPIC_{topic_id}"
-
-    chosen = sorted(
-        chosen,
-        key=lambda x: (0 if any(sig in x for sig in PREFERRED_SIGNAL_TERMS) else 1, -len(x))
-    )
-    return " | ".join(chosen[:3])
-
-
-def build_topic_label_from_phrases(phrases: list[str], topic_id: int) -> str:
-    if topic_id == -1:
-        return "OUTLIER"
-
-    cleaned = []
-    fallback = []
-
-    for phrase in phrases:
-        phrase = normalize_spaces(phrase)
-        if not phrase:
-            continue
-        fallback.append(phrase)
-
-        tokens = [t for t in re.findall(TOKEN_PATTERN, phrase) if t not in GENERIC_LABEL_STOPWORDS]
-        cleaned.extend(tokens if tokens else [phrase])
-
-    chosen_pool = cleaned if cleaned else fallback
-    if not chosen_pool:
-        return f"TOPIC_{topic_id}"
-
-    # unique preserve order
-    seen = set()
-    uniq = []
-    for x in chosen_pool:
-        if x not in seen:
-            seen.add(x)
-            uniq.append(x)
-
-    uniq = sorted(
-        uniq,
-        key=lambda x: (0 if any(sig in x for sig in PREFERRED_SIGNAL_TERMS) else 1, -len(x))
-    )
-    return " | ".join(uniq[:3]) if uniq else f"TOPIC_{topic_id}"
-
-
 def detect_phrase_col(df: pd.DataFrame) -> str:
     for cand in ["phrase", "phrase_canonical", "matched_phrase"]:
         if cand in df.columns:
@@ -192,18 +246,168 @@ def prepare_phrase_docs(canonical_df: pd.DataFrame) -> pd.DataFrame:
 
     df = df[keep_cols].copy()
 
+    for col in ["phrase_original", "phrase_canonical", "representative_phrase"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).map(normalize_spaces)
+
+    if "representative_phrase" not in df.columns:
+        df["representative_phrase"] = df["phrase_canonical"]
+
+    df["doc_text"] = df["phrase_canonical"].astype(str).map(normalize_spaces)
+    df["phrase_quality_score"] = df["doc_text"].map(score_phrase_quality)
+    df["is_meaningful_phrase"] = df["doc_text"].map(is_meaningful_phrase)
+
     sort_cols = [c for c in ["canonical_score_proxy", "cleaned_score", "df", "tf"] if c in df.columns]
     if sort_cols:
         df = df.sort_values(sort_cols, ascending=[False] * len(sort_cols))
 
     phrase_docs = df.drop_duplicates(subset=["phrase_canonical"]).copy().reset_index(drop=True)
-    if "representative_phrase" not in phrase_docs.columns:
-        phrase_docs["representative_phrase"] = phrase_docs["phrase_canonical"]
 
-    phrase_docs["doc_text"] = phrase_docs["phrase_canonical"].astype(str).map(normalize_spaces)
+    before_count = len(phrase_docs)
+    phrase_docs = phrase_docs.loc[phrase_docs["is_meaningful_phrase"]].copy()
+    after_count = len(phrase_docs)
+
+    if after_count < 20:
+        print("[STEP 3.5] filter too aggressive; restoring top phrases by quality")
+        restore_df = (
+            df.drop_duplicates(subset=["phrase_canonical"])
+            .copy()
+            .sort_values(
+                by=[c for c in ["phrase_quality_score", "canonical_score_proxy", "cleaned_score", "df", "tf"] if c in df.columns],
+                ascending=[False] * len([c for c in ["phrase_quality_score", "canonical_score_proxy", "cleaned_score", "df", "tf"] if c in df.columns])
+            )
+            .head(max(20, min(50, before_count)))
+        )
+        phrase_docs = restore_df.copy()
+
+    phrase_docs = phrase_docs.sort_values(
+        by=[c for c in ["phrase_quality_score", "canonical_score_proxy", "cleaned_score", "df", "tf"] if c in phrase_docs.columns],
+        ascending=[False] * len([c for c in ["phrase_quality_score", "canonical_score_proxy", "cleaned_score", "df", "tf"] if c in phrase_docs.columns])
+    ).reset_index(drop=True)
+
     phrase_docs["doc_index"] = range(len(phrase_docs))
 
+    print(f"[STEP 3.5] phrase filtering: {before_count:,} -> {len(phrase_docs):,}")
+
     return phrase_docs
+
+
+def build_topic_label_from_terms(terms: list[tuple[str, float]], topic_id: int) -> str:
+    if topic_id == -1:
+        return "OUTLIER"
+
+    candidate_terms = []
+    for term, score in terms:
+        term = normalize_spaces(term)
+        if not term:
+            continue
+        quality = score_phrase_quality(term)
+        candidate_terms.append((term, float(score), quality))
+
+    if not candidate_terms:
+        return f"TOPIC_{topic_id}"
+
+    candidate_terms = sorted(
+        candidate_terms,
+        key=lambda x: (
+            0 if contains_signal_term(x[0]) else 1,
+            -(x[2]),
+            -(x[1]),
+            -len(x[0]),
+        )
+    )
+
+    picked = []
+    seen = set()
+    for term, _, _ in candidate_terms:
+        if term in GENERIC_LABEL_STOPWORDS:
+            continue
+        if term not in seen:
+            picked.append(term)
+            seen.add(term)
+        if len(picked) >= 3:
+            break
+
+    if not picked:
+        picked = [candidate_terms[0][0]]
+
+    return " | ".join(picked[:3])
+
+
+def select_representative_phrases_for_cluster(grp: pd.DataFrame, top_k: int = 5) -> list[str]:
+    work = grp.copy()
+
+    score_cols = []
+    if "phrase_quality_score" in work.columns:
+        score_cols.append(("phrase_quality_score", 3.0))
+    if "canonical_score_proxy" in work.columns:
+        score_cols.append(("canonical_score_proxy", 2.0))
+    if "cleaned_score" in work.columns:
+        score_cols.append(("cleaned_score", 1.5))
+    if "df" in work.columns:
+        score_cols.append(("df", 1.0))
+    if "tf" in work.columns:
+        score_cols.append(("tf", 0.5))
+
+    combined_scores = []
+    for _, row in work.iterrows():
+        phrase = normalize_spaces(str(row["phrase_canonical"]))
+        score = 0.0
+        for col, weight in score_cols:
+            if col in row and pd.notna(row[col]):
+                score += float(row[col]) * weight
+        if contains_signal_term(phrase):
+            score += 3.0
+        if phrase in WEAK_SINGLETON_TERMS:
+            score -= 5.0
+        if len(tokenize_text(phrase)) >= 2:
+            score += 1.0
+        combined_scores.append((phrase, score))
+
+    combined_scores = sorted(combined_scores, key=lambda x: (-x[1], -len(x[0])))
+
+    seen = set()
+    selected = []
+    for phrase, _ in combined_scores:
+        if phrase not in seen:
+            selected.append(phrase)
+            seen.add(phrase)
+        if len(selected) >= top_k:
+            break
+
+    return selected
+
+
+def build_topic_label_from_cluster(grp: pd.DataFrame, topic_id: int) -> str:
+    if topic_id == -1:
+        return "OUTLIER"
+
+    reps = select_representative_phrases_for_cluster(grp, top_k=5)
+    if not reps:
+        return f"TOPIC_{topic_id}"
+
+    strong_multi = [
+        p for p in reps
+        if len(tokenize_text(p)) >= 2 and p not in WEAK_SINGLETON_TERMS
+    ]
+    if strong_multi:
+        return " | ".join(strong_multi[:3])
+
+    strong_any = [p for p in reps if p not in WEAK_SINGLETON_TERMS]
+    if strong_any:
+        return " | ".join(strong_any[:3])
+
+    return " | ".join(reps[:3])
+
+
+def choose_target_cluster_count(n_docs: int) -> int:
+    if n_docs <= 20:
+        return max(4, n_docs // 2)
+    if n_docs <= 50:
+        return max(6, min(12, n_docs // 3))
+    if n_docs <= 100:
+        return max(10, min(20, n_docs // 4))
+    return max(MIN_FINAL_CLUSTERS, min(MAX_FINAL_CLUSTERS, n_docs // 5))
 
 
 def fit_bertopic_on_phrases(phrase_docs: pd.DataFrame):
@@ -303,20 +507,86 @@ def fit_fallback_clustering_on_phrases(phrase_docs: pd.DataFrame):
         normalize_embeddings=True,
     )
 
-    # small n -> conservative cluster count
-    n_clusters = max(2, min(int(np.sqrt(n_docs)), max(2, n_docs // 8)))
-    n_clusters = min(n_clusters, n_docs - 1) if n_docs > 2 else 2
+    target_clusters = choose_target_cluster_count(n_docs)
+    target_clusters = min(target_clusters, n_docs - 1) if n_docs > 2 else 2
+    target_clusters = max(2, target_clusters)
 
-    print(f"[STEP 3.5] fallback clustering with n_clusters={n_clusters}")
+    print(f"[STEP 3.5] fallback clustering target_clusters={target_clusters}")
 
     clustering = AgglomerativeClustering(
-        n_clusters=n_clusters,
+        n_clusters=target_clusters,
         metric="cosine",
         linkage="average",
     )
     labels = clustering.fit_predict(embeddings)
 
     return None, list(labels), embeddings
+
+
+def split_large_clusters(
+    phrase_docs: pd.DataFrame,
+    topics: list[int],
+    embeddings: np.ndarray,
+) -> list[int]:
+    _, AgglomerativeClustering = safe_import_fallback_stack()
+
+    work = phrase_docs.copy()
+    work["topic_id"] = topics
+    new_topics = work["topic_id"].astype(int).tolist()
+
+    unique_topics = sorted(work["topic_id"].unique().tolist())
+    next_topic_id = (max(unique_topics) + 1) if unique_topics else 0
+
+    changed = False
+
+    for topic_id, grp in work.groupby("topic_id"):
+        cluster_size = len(grp)
+        if cluster_size < LARGE_CLUSTER_SPLIT_THRESHOLD:
+            continue
+
+        split_target = min(max(2, cluster_size // 6), 5)
+        if split_target <= 1:
+            continue
+
+        idxs = grp.index.tolist()
+        sub_emb = embeddings[idxs]
+
+        try:
+            sub_cluster = AgglomerativeClustering(
+                n_clusters=split_target,
+                metric="cosine",
+                linkage="average",
+            )
+            sub_labels = sub_cluster.fit_predict(sub_emb)
+        except Exception as e:
+            print(f"[STEP 3.5] large cluster split skipped for topic {topic_id}: {e}")
+            continue
+
+        label_counts = Counter(sub_labels)
+        if len(label_counts) <= 1:
+            continue
+
+        dominant_label, dominant_count = label_counts.most_common(1)[0]
+
+        if dominant_count >= cluster_size - 1:
+            continue
+
+        for local_idx, sub_lab in zip(idxs, sub_labels):
+            if sub_lab == dominant_label:
+                continue
+            new_topics[local_idx] = next_topic_id + int(sub_lab)
+
+        next_topic_id += split_target
+        changed = True
+        print(f"[STEP 3.5] split large cluster topic={topic_id}, size={cluster_size}, sub_clusters={split_target}")
+
+    if not changed:
+        return topics
+
+    # remap to dense ids
+    dense_map = {old: new for new, old in enumerate(sorted(set(new_topics)))}
+    remapped = [dense_map[t] for t in new_topics]
+    return remapped
 
 
 def build_topic_exports_from_fallback(
@@ -331,25 +601,38 @@ def build_topic_exports_from_fallback(
     topic_label_map: dict[int, str] = {}
 
     for topic_id, grp in phrase_map.groupby("topic_id"):
-        phrase_candidates = grp["phrase_canonical"].astype(str).tolist()
-        topic_label = build_topic_label_from_phrases(phrase_candidates, int(topic_id))
+        topic_label = build_topic_label_from_cluster(grp, int(topic_id))
         topic_label_map[int(topic_id)] = topic_label
 
         score_candidates = []
         for _, row in grp.iterrows():
+            phrase = normalize_spaces(str(row["phrase_canonical"]))
             score = 0.0
+            if "phrase_quality_score" in row and pd.notna(row["phrase_quality_score"]):
+                score += float(row["phrase_quality_score"]) * 3.0
             if "canonical_score_proxy" in row and pd.notna(row["canonical_score_proxy"]):
-                score = float(row["canonical_score_proxy"])
-            elif "cleaned_score" in row and pd.notna(row["cleaned_score"]):
-                score = float(row["cleaned_score"])
-            elif "df" in row and pd.notna(row["df"]):
-                score = float(row["df"])
-            elif "tf" in row and pd.notna(row["tf"]):
-                score = float(row["tf"])
-            score_candidates.append((normalize_spaces(str(row["phrase_canonical"])), score))
+                score += float(row["canonical_score_proxy"]) * 2.0
+            if "cleaned_score" in row and pd.notna(row["cleaned_score"]):
+                score += float(row["cleaned_score"]) * 1.5
+            if "df" in row and pd.notna(row["df"]):
+                score += float(row["df"]) * 1.0
+            if "tf" in row and pd.notna(row["tf"]):
+                score += float(row["tf"]) * 0.5
+            if contains_signal_term(phrase):
+                score += 3.0
+            if phrase in WEAK_SINGLETON_TERMS:
+                score -= 5.0
+            if len(tokenize_text(phrase)) >= 2:
+                score += 1.0
+            score_candidates.append((phrase, score))
 
         score_candidates = sorted(score_candidates, key=lambda x: (-x[1], -len(x[0])))
-        for rank, (term, score) in enumerate(score_candidates[:15], start=1):
+        seen_terms = set()
+        rank = 1
+        for term, score in score_candidates:
+            if term in seen_terms:
+                continue
+            seen_terms.add(term)
             topic_terms_rows.append({
                 "topic_id": int(topic_id),
                 "topic_label": topic_label,
@@ -357,16 +640,19 @@ def build_topic_exports_from_fallback(
                 "term": term,
                 "term_score": score,
             })
+            rank += 1
+            if rank > 15:
+                break
 
     topic_terms_df = pd.DataFrame(topic_terms_rows)
     phrase_map["topic_label"] = phrase_map["topic_id"].map(topic_label_map)
 
     agg_dict = {
-        "phrase_canonical": lambda s: sorted(set(s)),
-        "representative_phrase": lambda s: sorted(set(s)),
+        "phrase_canonical": lambda s: sorted(set(map(str, s))),
+        "representative_phrase": lambda s: sorted(set(map(str, s))),
     }
     if "phrase_original" in phrase_map.columns:
-        agg_dict["phrase_original"] = lambda s: sorted(set(s))
+        agg_dict["phrase_original"] = lambda s: sorted(set(map(str, s)))
     if "df" in phrase_map.columns:
         agg_dict["df"] = "max"
     if "tf" in phrase_map.columns:
@@ -375,6 +661,8 @@ def build_topic_exports_from_fallback(
         agg_dict["cleaned_score"] = "max"
     if "canonical_score_proxy" in phrase_map.columns:
         agg_dict["canonical_score_proxy"] = "max"
+    if "phrase_quality_score" in phrase_map.columns:
+        agg_dict["phrase_quality_score"] = "max"
 
     concept_df = (
         phrase_map.groupby(["topic_id", "topic_label", "is_outlier_topic"], as_index=False)
@@ -387,15 +675,36 @@ def build_topic_exports_from_fallback(
             "tf": "concept_tf_sum",
             "cleaned_score": "concept_best_phrase_score",
             "canonical_score_proxy": "concept_score_proxy",
+            "phrase_quality_score": "concept_best_quality_score",
         })
     )
 
     concept_df["concept_size"] = concept_df["member_phrases"].map(len)
-    sort_cols = [c for c in ["concept_size", "concept_df_proxy", "concept_score_proxy", "concept_tf_sum"] if c in concept_df.columns]
+
+    # cluster size 1 너무 많을 경우 순위에서 뒤로
+    concept_df["is_singleton"] = concept_df["concept_size"].eq(1)
+
+    sort_cols = [c for c in [
+        "is_singleton",
+        "concept_size",
+        "concept_best_quality_score",
+        "concept_df_proxy",
+        "concept_score_proxy",
+        "concept_tf_sum",
+    ] if c in concept_df.columns]
+
+    ascending = []
+    for c in sort_cols:
+        if c == "is_singleton":
+            ascending.append(True)
+        else:
+            ascending.append(False)
+
     concept_df = concept_df.sort_values(
         by=sort_cols,
-        ascending=[False] * len(sort_cols)
+        ascending=ascending,
     ).reset_index(drop=True)
+
     concept_df["concept_id"] = [f"BT{idx:04d}" for idx in range(1, len(concept_df) + 1)]
 
     topic_to_concept_id = dict(zip(concept_df["topic_id"], concept_df["concept_id"]))
@@ -445,11 +754,11 @@ def build_topic_exports(
     phrase_map["topic_label"] = phrase_map["topic_id"].map(topic_label_map)
 
     agg_dict = {
-        "phrase_canonical": lambda s: sorted(set(s)),
-        "representative_phrase": lambda s: sorted(set(s)),
+        "phrase_canonical": lambda s: sorted(set(map(str, s))),
+        "representative_phrase": lambda s: sorted(set(map(str, s))),
     }
     if "phrase_original" in phrase_map.columns:
-        agg_dict["phrase_original"] = lambda s: sorted(set(s))
+        agg_dict["phrase_original"] = lambda s: sorted(set(map(str, s)))
     if "df" in phrase_map.columns:
         agg_dict["df"] = "max"
     if "tf" in phrase_map.columns:
@@ -458,6 +767,8 @@ def build_topic_exports(
         agg_dict["cleaned_score"] = "max"
     if "canonical_score_proxy" in phrase_map.columns:
         agg_dict["canonical_score_proxy"] = "max"
+    if "phrase_quality_score" in phrase_map.columns:
+        agg_dict["phrase_quality_score"] = "max"
 
     concept_df = (
         phrase_map.groupby(["topic_id", "topic_label", "is_outlier_topic"], as_index=False)
@@ -470,16 +781,35 @@ def build_topic_exports(
             "tf": "concept_tf_sum",
             "cleaned_score": "concept_best_phrase_score",
             "canonical_score_proxy": "concept_score_proxy",
+            "phrase_quality_score": "concept_best_quality_score",
         })
     )
 
     concept_df["concept_size"] = concept_df["member_phrases"].map(len)
+    concept_df["is_singleton"] = concept_df["concept_size"].eq(1)
 
-    sort_cols = [c for c in ["is_outlier_topic", "concept_size", "concept_df_proxy", "concept_score_proxy", "concept_tf_sum"] if c in concept_df.columns]
+    sort_cols = [c for c in [
+        "is_outlier_topic",
+        "is_singleton",
+        "concept_size",
+        "concept_best_quality_score",
+        "concept_df_proxy",
+        "concept_score_proxy",
+        "concept_tf_sum",
+    ] if c in concept_df.columns]
+
+    ascending = []
+    for c in sort_cols:
+        if c in {"is_outlier_topic", "is_singleton"}:
+            ascending.append(True)
+        else:
+            ascending.append(False)
+
     concept_df = concept_df.sort_values(
         by=sort_cols,
-        ascending=[True] + [False] * (len(sort_cols) - 1)
+        ascending=ascending,
     ).reset_index(drop=True)
+
     concept_df["concept_id"] = [f"BT{idx:04d}" for idx in range(1, len(concept_df) + 1)]
 
     topic_to_concept_id = dict(zip(concept_df["topic_id"], concept_df["concept_id"]))
@@ -590,6 +920,25 @@ def build_fallback_topic_info(
     return pd.DataFrame(rows)
 
 
+def print_quality_summary(concept_df: pd.DataFrame) -> None:
+    if concept_df.empty:
+        print("[STEP 3.5] no concept families generated")
+        return
+
+    sizes = concept_df["concept_size"].tolist() if "concept_size" in concept_df.columns else []
+    singleton_count = int((concept_df["concept_size"] == 1).sum()) if "concept_size" in concept_df.columns else 0
+    large_count = int((concept_df["concept_size"] >= LARGE_CLUSTER_SPLIT_THRESHOLD).sum()) if "concept_size" in concept_df.columns else 0
+
+    print("[STEP 3.5] quality summary")
+    print(f"  total concepts       : {len(concept_df):,}")
+    if sizes:
+        print(f"  avg concept size     : {np.mean(sizes):.2f}")
+        print(f"  median concept size  : {np.median(sizes):.2f}")
+        print(f"  max concept size     : {np.max(sizes):,}")
+    print(f"  singleton concepts   : {singleton_count:,}")
+    print(f"  large concepts(>={LARGE_CLUSTER_SPLIT_THRESHOLD}) : {large_count:,}")
+
+
 def run_step35_bertopic_rebuild(
     input_dir: str | Path,
     output_dir: str | Path,
@@ -614,7 +963,7 @@ def run_step35_bertopic_rebuild(
     canonical_df = pd.read_csv(canonical_map_path)
     phrase_docs = prepare_phrase_docs(canonical_df)
 
-    print(f"[STEP 3.5] phrase docs for BERTopic: {len(phrase_docs):,}")
+    print(f"[STEP 3.5] phrase docs for modeling: {len(phrase_docs):,}")
 
     topic_model = None
     topics = None
@@ -640,7 +989,9 @@ def run_step35_bertopic_rebuild(
         print("[STEP 3.5] switching to fallback clustering")
         print(traceback.format_exc())
 
-        topic_model, topics, _embeddings = fit_fallback_clustering_on_phrases(phrase_docs)
+        topic_model, topics, embeddings = fit_fallback_clustering_on_phrases(phrase_docs)
+        topics = split_large_clusters(phrase_docs, topics, embeddings)
+
         concept_df, phrase_topic_map_df, topic_terms_df = build_topic_exports_from_fallback(
             phrase_docs=phrase_docs,
             topics=topics,
@@ -656,7 +1007,11 @@ def run_step35_bertopic_rebuild(
         )
         topic_info_df = topic_info_df.merge(topic_label_map, on="Topic", how="left", suffixes=("", "_mapped"))
         if "topic_label_mapped" in topic_info_df.columns:
-            topic_info_df["topic_label"] = topic_info_df["topic_label_mapped"].combine_first(topic_info_df.get("topic_label"))
+            base_col = "topic_label" if "topic_label" in topic_info_df.columns else None
+            if base_col is None:
+                topic_info_df["topic_label"] = topic_info_df["topic_label_mapped"]
+            else:
+                topic_info_df["topic_label"] = topic_info_df["topic_label_mapped"].combine_first(topic_info_df["topic_label"])
             topic_info_df = topic_info_df.drop(columns=["topic_label_mapped"])
 
     doc_phrase_df = pd.read_csv(doc_phrase_map_path)
@@ -689,6 +1044,8 @@ def run_step35_bertopic_rebuild(
     print(f"doc-concept rows  : {doc_concept_map_df.shape[0]:,}")
     print()
 
+    print_quality_summary(concept_df)
+
     preview_cols = [
         c for c in [
             "concept_id",
@@ -699,7 +1056,9 @@ def run_step35_bertopic_rebuild(
             "concept_tf_sum",
             "concept_best_phrase_score",
             "concept_score_proxy",
+            "concept_best_quality_score",
             "is_outlier_topic",
+            "is_singleton",
             "member_phrases_str",
             "run_mode",
         ]
