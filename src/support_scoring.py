@@ -36,10 +36,6 @@ def compute_phrase_support(
     abstract_col: str = "abstract",
     claims_col: str = "claims",
 ) -> SupportScoringResult:
-    """
-    후보 phrase별로 title/claims support를 계산한다.
-    후보 생성은 title+abstract에서 했지만, support는 title/claims를 별도로 본다.
-    """
     if candidates_df.empty:
         empty_cols = list(candidates_df.columns) + [
             "title_df", "claims_df", "title_ratio", "claims_ratio",
@@ -53,7 +49,15 @@ def compute_phrase_support(
     corpus_lookup = corpus_df[[doc_id_col, title_col, abstract_col, claims_col]].copy()
     corpus_lookup[doc_id_col] = corpus_lookup[doc_id_col].astype(str)
 
-    # phrase가 실제로 어느 문서 후보였는지 map 기준으로만 확인
+    doc_phrase_map_df = doc_phrase_map_df.copy()
+    doc_phrase_map_df[doc_id_col] = doc_phrase_map_df[doc_id_col].astype(str)
+
+    candidates_df = candidates_df.copy()
+    if "phrase" in candidates_df.columns:
+        candidates_df["phrase"] = candidates_df["phrase"].astype(str)
+    if "phrase" in doc_phrase_map_df.columns:
+        doc_phrase_map_df["phrase"] = doc_phrase_map_df["phrase"].astype(str)
+
     merged = doc_phrase_map_df.merge(
         corpus_lookup,
         on=doc_id_col,
@@ -84,23 +88,19 @@ def compute_phrase_support(
     scored["title_df"] = scored["title_df"].fillna(0).astype(int)
     scored["claims_df"] = scored["claims_df"].fillna(0).astype(int)
 
-    # 비율화
     scored["title_ratio"] = (scored["title_df"] / scored["df"].clip(lower=1)).round(4)
     scored["claims_ratio"] = (scored["claims_df"] / scored["df"].clip(lower=1)).round(4)
 
-    # title boost: 제목에 자주 직접 뜨는 용어는 가점
     scored["title_boost"] = (
         scored["title_ratio"] * 1.2
         + (scored["title_df"].clip(upper=10) / 10.0) * 0.6
     ).round(4)
 
-    # claims support: 청구항 재등장은 구현/법적 범위 지지로 해석
     scored["claims_support_score"] = (
         scored["claims_ratio"] * 1.0
         + (scored["claims_df"].clip(upper=15) / 15.0) * 0.5
     ).round(4)
 
-    # 너무 generic한 단일어가 claims에서만 센 경우 과대평가 방지
     onegram_generic_penalty = (
         (scored["ngram"] == 1)
         & (scored["char_len"] <= 3)

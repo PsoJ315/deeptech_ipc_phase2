@@ -12,6 +12,7 @@ from src.phrase_quality import (
     base_quality_score,
     completeness_penalty,
     is_number_prefix_noise,
+    is_numeric_fragment_noise,
     is_protected_term,
     normalize_candidate_text,
     patent_noise_penalty,
@@ -22,12 +23,17 @@ TOKEN_BLACKLIST = {
     "본", "발명", "관한", "위한", "이용한", "통한", "에서", "으로", "하는", "되는",
     "및", "또는", "상기", "적어도", "하나의", "하나", "이상", "이하",
     "가능", "실시", "개시", "이용", "구비",
+    "것", "예", "상세", "정의", "특징", "용도", "이때", "내", "양", "부",
+    "포함",
 }
 
 ONEGRAM_SOFT_BLOCK = {
     "형성", "사용", "실시", "개시", "제조", "복수", "이용", "구비",
     "위치", "생성", "연결", "제어", "배치", "방향", "정보",
     "영역", "채널", "부분", "방법", "장치", "시스템", "재료", "물질",
+    "것", "예", "상세", "정의", "특징", "용도", "이때", "내", "양", "부",
+    "조성", "결합", "기초", "기반", "데이터", "수행", "발생", "결정",
+    "저장", "향상", "사용자", "설치", "이동", "상태", "대응", "내부", "처리", "선택",
 }
 
 POS_ALLOW_PREFIX = ("N", "SL", "SN", "XR")
@@ -100,6 +106,7 @@ def filter_phrase_surface(phrase: str) -> bool:
         return False
 
     compact = phrase.replace(" ", "")
+    toks = phrase.split()
 
     if len(compact) <= 1:
         return False
@@ -110,16 +117,52 @@ def filter_phrase_surface(phrase: str) -> bool:
     if is_number_prefix_noise(phrase) and not is_protected_term(phrase):
         return False
 
-    if len(phrase.split()) == 1:
+    if is_numeric_fragment_noise(phrase) and not is_protected_term(phrase):
+        return False
+
+    if phrase.endswith(("에", "의", "및", "또는")) and not is_protected_term(phrase):
+        return False
+
+    # orphan alpha token 제거: a, b, g, m 같은 찌꺼기
+    if any(tok.lower() in {"a", "b", "c", "d", "e", "f", "g", "m"} for tok in toks):
+        if not is_protected_term(phrase):
+            return False
+
+    # 숫자+일반한글 강결합 찌꺼기 제거
+    if re.search(r"\d(?:\.\d+)?[가-힣]{2,}", compact) and not is_protected_term(phrase):
+        return False
+
+    if re.search(r"[가-힣]{2,}\d+$", compact) and not is_protected_term(phrase):
+        return False
+
+    if len(toks) == 1:
         if phrase in ONEGRAM_SOFT_BLOCK and not is_protected_term(phrase):
             return False
 
-        # 제1, 제2 류 제거
         if re.match(r"^제\d+$", compact):
             return False
 
-        # 숫자+짧은 일반명사 제거
         if re.match(r"^\d+[가-힣]{1,2}$", compact) and not is_protected_term(phrase):
+            return False
+
+    bad_suffix_tokens = {"것", "예", "상세", "정의", "특징", "용도", "이때", "내", "양", "부"}
+    if toks and toks[-1] in bad_suffix_tokens and not is_protected_term(phrase):
+        return False
+    if toks and toks[0] in bad_suffix_tokens and not is_protected_term(phrase):
+        return False
+
+    # 마지막 토큰이 너무 generic한 multi-gram 제거
+    if len(toks) >= 2 and toks[-1] in {"활성", "입자", "부피", "프레임", "워크"}:
+        if not is_protected_term(phrase):
+            return False
+
+    # 3gram 이상인데 domain anchor가 전혀 없으면 제거
+    if len(toks) >= 3:
+        if not any(k in phrase for k in {
+            "전지", "배터리", "반도체", "전해질", "전극", "코팅",
+            "합금", "카본", "고분자", "세공", "프레임워크", "조성물",
+            "노즐", "프린팅"
+        }):
             return False
 
     if phrase in {"및", "또는", "상기"}:
